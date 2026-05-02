@@ -24,6 +24,26 @@ var httpClient = (params) => ({
         }
         return { status: 'ERROR', reason: 'invalid response' };
     },
+    AuthSocket: async (request, cb, abort, ws) => {
+        let finalRoute = '/socket/auth';
+        const auth = await params.retrieveGuestSensitiveAuth();
+        if (auth === null)
+            throw new Error('retrieveGuestSensitiveAuth() returned null');
+        const socket = new WebSocket(params.baseUrl + finalRoute);
+        let closedByClient = false;
+        abort?.addEventListener('abort', () => { closedByClient = true; socket.close(); });
+        socket.addEventListener('close', () => { if (!closedByClient)
+            ws?.onClose?.(); });
+        socket.addEventListener('open', () => {
+            ws?.onOpen?.();
+            socket.send(JSON.stringify({ body: request, _authorization: auth }));
+        });
+        socket.addEventListener('message', (event) => {
+            const data = JSON.parse(event.data);
+            cb(data);
+        });
+        return { close: () => { closedByClient = true; socket.close(); } };
+    },
     GetNostrRelays: async () => {
         const auth = await params.retrieveAccessTokenAuth();
         if (auth === null)

@@ -24,6 +24,7 @@ export class ApiFacade implements SanctumApi {
     this.client = httpClient({
       baseUrl: deps.baseUrl,
       retrieveGuestAuth: async () => '',
+      retrieveGuestSensitiveAuth: async () => '',
       retrieveAccessTokenAuth: async () => {
         const token = await this.deps.session.getTokenData();
         return token ? `Bearer ${token.access_token}` : null;

@@ -55,21 +55,6 @@ const UserNostrPubKeyValidate = (o, opts = {}, path = 'UserNostrPubKey::root.') 
         return new Error(`${path}.pubkey: custom check failed`);
     return null;
 };
-const SocketAuthRequestTokenValidate = (o, opts = {}, path = 'SocketAuthRequestToken::root.') => {
-    if (opts.checkOptionalsAreSet && opts.allOptionalsAreSet)
-        return new Error(path + ': only one of checkOptionalsAreSet or allOptionalNonDefault can be set for each message');
-    if (typeof o !== 'object' || o === null)
-        return new Error(path + ': object is not an instance of an object or is null');
-    if (typeof o.request_token !== 'string')
-        return new Error(`${path}.request_token: is not a string`);
-    if (opts.request_token_CustomCheck && !opts.request_token_CustomCheck(o.request_token))
-        return new Error(`${path}.request_token: custom check failed`);
-    if (typeof o.expires_at !== 'number')
-        return new Error(`${path}.expires_at: is not a number`);
-    if (opts.expires_at_CustomCheck && !opts.expires_at_CustomCheck(o.expires_at))
-        return new Error(`${path}.expires_at: custom check failed`);
-    return null;
-};
 const NostrRelaysValidate = (o, opts = {}, path = 'NostrRelays::root.') => {
     if (opts.checkOptionalsAreSet && opts.allOptionalsAreSet)
         return new Error(path + ': only one of checkOptionalsAreSet or allOptionalNonDefault can be set for each message');
@@ -152,17 +137,11 @@ const TokensDataValidate = (o, opts = {}, path = 'TokensData::root.') => {
         return new Error(`${path}.identifier: custom check failed`);
     return null;
 };
-const SocketErrorMessageValidate = (o, opts = {}, path = 'SocketErrorMessage::root.') => {
-    if (opts.checkOptionalsAreSet && opts.allOptionalsAreSet)
-        return new Error(path + ': only one of checkOptionalsAreSet or allOptionalNonDefault can be set for each message');
-    if (typeof o !== 'object' || o === null)
-        return new Error(path + ': object is not an instance of an object or is null');
-    if (typeof o.error !== 'string')
-        return new Error(`${path}.error: is not a string`);
-    if (opts.error_CustomCheck && !opts.error_CustomCheck(o.error))
-        return new Error(`${path}.error: custom check failed`);
-    return null;
-};
+var AuthSocketResponse_payload_type;
+(function (AuthSocketResponse_payload_type) {
+    AuthSocketResponse_payload_type["REQUEST_TOKEN"] = "request_token";
+    AuthSocketResponse_payload_type["TOKENS"] = "tokens";
+})(AuthSocketResponse_payload_type || (AuthSocketResponse_payload_type = {}));
 
-export { ErrorCode$1 as ErrorCode, Nip44DecryptResponseValidate, Nip44EncryptResponseValidate, Nip98EventResponseValidate, NostrRelaysValidate, NostrSignResponseValidate, RelayPolicyValidate, SocketAuthRequestTokenValidate, SocketErrorMessageValidate, TokensDataValidate, UserNostrPubKeyValidate };
+export { AuthSocketResponse_payload_type, ErrorCode$1 as ErrorCode, Nip44DecryptResponseValidate, Nip44EncryptResponseValidate, Nip98EventResponseValidate, NostrRelaysValidate, NostrSignResponseValidate, RelayPolicyValidate, TokensDataValidate, UserNostrPubKeyValidate };
 //# sourceMappingURL=types.js.map

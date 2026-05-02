@@ -1,4 +1,5 @@
-import { SocketAuthRequestTokenValidate, TokensDataValidate, SocketErrorMessageValidate } from '../proto/types.js';
+import httpClient from '../proto/http_client.js';
+import { AuthSocketResponse_payload_type } from '../proto/types.js';
 
 const AUTH_SOCKET_CANCELLED_MESSAGE = 'cancelled by user';
 const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
@@ -8,6 +9,7 @@ const SOCKET_PROTOCOL_VERSION = 1;
 class AuthSocketClient {
     constructor(options) {
         this.socket = null;
+        this.socketAbortController = null;
         this.resolveStart = null;
         this.rejectStart = null;
         this.connectTimeoutTimer = null;
@@ -18,6 +20,21 @@ class AuthSocketClient {
         this.lastRequestToken = null;
         this.url = options.url;
         this.getClientKey = options.getClientKey;
+        this.client = httpClient({
+            baseUrl: options.url,
+            retrieveGuestSensitiveAuth: async () => '',
+            retrieveGuestAuth: async () => '',
+            retrieveAccessTokenAuth: async () => '',
+            retrieveLegacyAccessTokenAuth: async () => '',
+            retrieveUserAuth: async () => '',
+            encryptCallback: async () => {
+                throw new Error('encryption callback not enabled');
+            },
+            decryptCallback: async () => {
+                throw new Error('decryption callback not enabled');
+            },
+            deviceId: '',
+        });
         this.onState = options.onState;
         this.onRequestToken = options.onRequestToken;
         this.onError = options.onError;
@@ -61,75 +78,86 @@ class AuthSocketClient {
         this.clearConnectTimeout();
         this.cleanupSocket();
         this.onState?.(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
-        let ws;
-        try {
-            ws = new WebSocket(this.url);
-        }
-        catch {
-            this.terminalReject(new Error('Failed to create WebSocket'));
-            return;
-        }
-        this.socket = ws;
+        const controller = new AbortController();
+        this.socketAbortController = controller;
         this.connectTimeoutTimer = window.setTimeout(() => {
             if (this.aborted)
                 return;
             this.onError?.('Connection timed out');
-            try {
-                ws.close();
-            }
-            catch {
-                /* noop */
-            }
+            this.cleanupSocket();
+            this.handleDisconnected();
         }, this.connectTimeoutMs);
-        ws.onopen = () => {
-            if (this.aborted)
-                return;
-            this.clearConnectTimeout();
-            this.reconnectAttempts = 0;
-            this.onState?.('connected');
-            void this.sendClientHello();
-        };
-        ws.onmessage = (event) => {
-            if (this.aborted)
-                return;
-            const parsed = this.parseMessage(event.data);
-            if (!parsed) {
-                this.terminalReject(new Error('Failed to parse websocket response'));
-                return;
-            }
-            if ('request_token' in parsed) {
-                this.lastRequestToken = parsed.request_token;
-                this.onRequestToken?.(parsed);
-                return;
-            }
-            if ('access_token' in parsed && 'refresh_token' in parsed) {
-                this.lastRequestToken = null;
-                const resolve = this.resolveStart;
-                this.cleanupSocket();
-                resolve?.(parsed);
-                return;
-            }
-            if ('error' in parsed) {
-                this.terminalReject(new Error(parsed.error || 'Socket auth failed'));
-            }
-        };
-        ws.onerror = () => { };
-        ws.onclose = () => {
-            this.clearConnectTimeout();
-            if (this.aborted)
-                return;
-            if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-                this.terminalReject(new Error('WebSocket reconnection limit reached'));
+        void this.startSocket(controller);
+    }
+    async startSocket(controller) {
+        if (this.aborted)
+            return;
+        try {
+            const hello = {
+                client_key: await this.getClientKey(),
+                protocol_version: SOCKET_PROTOCOL_VERSION,
+                request_token: this.lastRequestToken ?? undefined,
+            };
+            const socket = await this.client.AuthSocket(hello, (result) => this.handleMessage(result), controller.signal, {
+                onOpen: () => {
+                    if (this.aborted || this.socketAbortController !== controller)
+                        return;
+                    this.clearConnectTimeout();
+                    this.reconnectAttempts = 0;
+                    this.onState?.('connected');
+                },
+                onClose: () => {
+                    if (this.aborted || this.socketAbortController !== controller)
+                        return;
+                    this.handleDisconnected();
+                }
+            });
+            if (this.aborted || this.socketAbortController !== controller) {
+                socket.close();
                 return;
             }
-            const idx = Math.min(this.reconnectAttempts, this.reconnectBackoff.length - 1);
-            const delay = this.reconnectBackoff[idx] ?? this.reconnectBackoff[this.reconnectBackoff.length - 1];
-            this.reconnectAttempts += 1;
-            this.reconnectTimer = window.setTimeout(() => {
-                this.reconnectTimer = null;
-                this.openSocket();
-            }, delay);
-        };
+            this.socket = socket;
+        }
+        catch {
+            if (this.aborted || this.socketAbortController !== controller)
+                return;
+            this.terminalReject(new Error('Failed to initialize websocket auth'));
+        }
+    }
+    handleMessage(message) {
+        if (this.aborted)
+            return;
+        if (message.status === 'ERROR') {
+            this.terminalReject(new Error(message.reason || 'Socket auth failed'));
+            return;
+        }
+        if (message.payload.type === AuthSocketResponse_payload_type.REQUEST_TOKEN) {
+            this.lastRequestToken = message.payload.request_token.request_token;
+            this.onRequestToken?.(message.payload.request_token);
+            return;
+        }
+        if (message.payload.type === AuthSocketResponse_payload_type.TOKENS) {
+            this.lastRequestToken = null;
+            const resolve = this.resolveStart;
+            this.cleanupSocket();
+            resolve?.(message.payload.tokens);
+        }
+    }
+    handleDisconnected() {
+        this.clearConnectTimeout();
+        if (this.aborted)
+            return;
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+            this.terminalReject(new Error('WebSocket reconnection limit reached'));
+            return;
+        }
+        const idx = Math.min(this.reconnectAttempts, this.reconnectBackoff.length - 1);
+        const delay = this.reconnectBackoff[idx] ?? this.reconnectBackoff[this.reconnectBackoff.length - 1];
+        this.reconnectAttempts += 1;
+        this.reconnectTimer = window.setTimeout(() => {
+            this.reconnectTimer = null;
+            this.openSocket();
+        }, delay);
     }
     terminalReject(err) {
         this.onError?.(err.message);
@@ -138,42 +166,6 @@ class AuthSocketClient {
         this.resolveStart = null;
         this.cleanupSocket();
         reject?.(err);
-    }
-    async sendClientHello() {
-        if (!this.socket || this.aborted)
-            return;
-        try {
-            const hello = {
-                client_key: await this.getClientKey(),
-                protocol_version: SOCKET_PROTOCOL_VERSION,
-                request_token: this.lastRequestToken ?? undefined,
-            };
-            this.socket.send(JSON.stringify(hello));
-        }
-        catch {
-            this.terminalReject(new Error('Failed to initialize websocket auth'));
-        }
-    }
-    parseMessage(raw) {
-        if (typeof raw !== 'string')
-            return null;
-        let parsedMessage;
-        try {
-            parsedMessage = JSON.parse(raw);
-        }
-        catch {
-            return null;
-        }
-        if (SocketAuthRequestTokenValidate(parsedMessage) === null) {
-            return parsedMessage;
-        }
-        if (TokensDataValidate(parsedMessage) === null) {
-            return parsedMessage;
-        }
-        if (SocketErrorMessageValidate(parsedMessage) === null) {
-            return parsedMessage;
-        }
-        return null;
     }
     clearConnectTimeout() {
         if (this.connectTimeoutTimer !== null) {
@@ -189,18 +181,14 @@ class AuthSocketClient {
         }
     }
     cleanupSocket() {
+        this.socketAbortController?.abort();
+        this.socketAbortController = null;
         if (!this.socket)
             return;
-        const ws = this.socket;
+        const socket = this.socket;
         this.socket = null;
-        ws.onopen = null;
-        ws.onclose = null;
-        ws.onerror = null;
-        ws.onmessage = null;
         try {
-            if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
-                ws.close();
-            }
+            socket.close();
         }
         catch {
             /* noop */

@@ -214,31 +214,40 @@ export type MintFromRefreshTokenRequestOptions = OptionsBaseMessage & {
     refresh_token_CustomCheck?: (v: string) => boolean;
 };
 export declare const MintFromRefreshTokenRequestValidate: (o?: MintFromRefreshTokenRequest, opts?: MintFromRefreshTokenRequestOptions, path?: string) => Error | null;
-export type SocketAuthRequestToken = {
-    request_token: string;
+export type AuthSocketAuthRequestTokenResponse = {
     expires_at: number;
+    request_token: string;
 };
-export declare const SocketAuthRequestTokenOptionalFields: [];
-export type SocketAuthRequestTokenOptions = OptionsBaseMessage & {
+export declare const AuthSocketAuthRequestTokenResponseOptionalFields: [];
+export type AuthSocketAuthRequestTokenResponseOptions = OptionsBaseMessage & {
     checkOptionalsAreSet?: [];
-    request_token_CustomCheck?: (v: string) => boolean;
     expires_at_CustomCheck?: (v: number) => boolean;
+    request_token_CustomCheck?: (v: string) => boolean;
 };
-export declare const SocketAuthRequestTokenValidate: (o?: SocketAuthRequestToken, opts?: SocketAuthRequestTokenOptions, path?: string) => Error | null;
-export type SocketClientHello = {
+export declare const AuthSocketAuthRequestTokenResponseValidate: (o?: AuthSocketAuthRequestTokenResponse, opts?: AuthSocketAuthRequestTokenResponseOptions, path?: string) => Error | null;
+export type AuthSocketClientHello = {
     client_key: string;
     protocol_version: number;
     request_token?: string;
 };
-export type SocketClientHelloOptionalField = 'request_token';
-export declare const SocketClientHelloOptionalFields: SocketClientHelloOptionalField[];
-export type SocketClientHelloOptions = OptionsBaseMessage & {
-    checkOptionalsAreSet?: SocketClientHelloOptionalField[];
+export type AuthSocketClientHelloOptionalField = 'request_token';
+export declare const AuthSocketClientHelloOptionalFields: AuthSocketClientHelloOptionalField[];
+export type AuthSocketClientHelloOptions = OptionsBaseMessage & {
+    checkOptionalsAreSet?: AuthSocketClientHelloOptionalField[];
+    client_key_CustomCheck?: (v: string) => boolean;
     protocol_version_CustomCheck?: (v: number) => boolean;
     request_token_CustomCheck?: (v?: string) => boolean;
-    client_key_CustomCheck?: (v: string) => boolean;
 };
-export declare const SocketClientHelloValidate: (o?: SocketClientHello, opts?: SocketClientHelloOptions, path?: string) => Error | null;
+export declare const AuthSocketClientHelloValidate: (o?: AuthSocketClientHello, opts?: AuthSocketClientHelloOptions, path?: string) => Error | null;
+export type AuthSocketResponse = {
+    payload: AuthSocketResponse_payload;
+};
+export declare const AuthSocketResponseOptionalFields: [];
+export type AuthSocketResponseOptions = OptionsBaseMessage & {
+    checkOptionalsAreSet?: [];
+    payload_Options?: AuthSocketResponse_payloadOptions;
+};
+export declare const AuthSocketResponseValidate: (o?: AuthSocketResponse, opts?: AuthSocketResponseOptions, path?: string) => Error | null;
 export type Empty = {};
 export declare const EmptyOptionalFields: [];
 export type EmptyOptions = OptionsBaseMessage & {
@@ -312,13 +321,21 @@ export type TokensDataOptions = OptionsBaseMessage & {
     account_identifier_CustomCheck?: (v: string) => boolean;
 };
 export declare const TokensDataValidate: (o?: TokensData, opts?: TokensDataOptions, path?: string) => Error | null;
-export type SocketErrorMessage = {
-    error: string;
+export declare enum AuthSocketResponse_payload_type {
+    REQUEST_TOKEN = "request_token",
+    TOKENS = "tokens"
+}
+export declare const enumCheckAuthSocketResponse_payload_type: (e?: AuthSocketResponse_payload_type) => boolean;
+export type AuthSocketResponse_payload = {
+    type: AuthSocketResponse_payload_type.REQUEST_TOKEN;
+    request_token: AuthSocketAuthRequestTokenResponse;
+} | {
+    type: AuthSocketResponse_payload_type.TOKENS;
+    tokens: TokensData;
 };
-export declare const SocketErrorMessageOptionalFields: [];
-export type SocketErrorMessageOptions = OptionsBaseMessage & {
-    checkOptionalsAreSet?: [];
-    error_CustomCheck?: (v: string) => boolean;
+export type AuthSocketResponse_payloadOptions = {
+    request_token_Options?: AuthSocketAuthRequestTokenResponseOptions;
+    tokens_Options?: TokensDataOptions;
 };
-export declare const SocketErrorMessageValidate: (o?: SocketErrorMessage, opts?: SocketErrorMessageOptions, path?: string) => Error | null;
+export declare const AuthSocketResponse_payloadValidate: (o?: AuthSocketResponse_payload, opts?: AuthSocketResponse_payloadOptions, path?: string) => Error | null;
 export {};

@@ -5,9 +5,10 @@ export type ResultError = {
 };
 export type ClientParams = {
     baseUrl: string;
-    retrieveGuestAuth: () => Promise<string | null>;
-    retrieveLegacyAccessTokenAuth: () => Promise<string | null>;
     retrieveAccessTokenAuth: () => Promise<string | null>;
+    retrieveGuestAuth: () => Promise<string | null>;
+    retrieveGuestSensitiveAuth: () => Promise<string | null>;
+    retrieveLegacyAccessTokenAuth: () => Promise<string | null>;
     retrieveUserAuth: () => Promise<string | null>;
     encryptCallback: (plain: any) => Promise<any>;
     decryptCallback: (encrypted: any) => Promise<any>;
@@ -18,6 +19,14 @@ declare const _default: (params: ClientParams) => {
     GetNostrPubKey: () => Promise<ResultError | ({
         status: "OK";
     } & Types.UserNostrPubKey)>;
+    AuthSocket: (request: Types.AuthSocketClientHello, cb: (v: ResultError | ({
+        status: "OK";
+    } & Types.AuthSocketResponse)) => void, abort?: AbortSignal, ws?: {
+        onOpen?: () => void;
+        onClose?: () => void;
+    }) => Promise<{
+        close: () => void;
+    }>;
     GetNostrRelays: () => Promise<ResultError | ({
         status: "OK";
     } & Types.NostrRelays)>;
