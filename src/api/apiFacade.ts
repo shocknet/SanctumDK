@@ -1,6 +1,7 @@
 import { ErrorCode, SanctumDKError, isReauthReason } from '../core/errors';
 import type { TypedEventBus } from '../core/events';
 import type { SessionManager } from '../session/sessionManager';
+import { withRefreshLock } from '../session/refreshLock';
 import type { ClientKeyStore } from '../storage/clientKeyStore';
 import httpClient, { type ResultError } from '../proto/http_client';
 import type { SanctumApi } from '../types';
@@ -70,29 +71,42 @@ export class ApiFacade implements SanctumApi {
     if (this.refreshPromise) {
       return this.refreshPromise;
     }
-    this.refreshPromise = (async () => {
-      const current = await this.deps.session.getTokenData();
-      if (!current) {
-        return this.requireReauth(ErrorCode.REFRESH_TOKEN_INVALID);
-      }
-      const refresh = await this.client.MintFromRefreshToken({
-        refresh_token: current.refresh_token,
-      });
-      if (refresh.status === 'ERROR') {
-        if (isReauthReason(refresh.reason)) {
-          return this.requireReauth(refresh.reason);
-        }
-        throw new SanctumDKError(refresh.reason, refresh.reason);
-      }
-      await this.deps.session.updateTokensAfterRefresh(refresh);
-      return refresh;
-    })();
+    this.refreshPromise = this.refreshAcrossTabs();
 
     try {
       return await this.refreshPromise;
     } finally {
       this.refreshPromise = null;
     }
+  }
+
+  private async refreshAcrossTabs(): Promise<Types.TokensData> {
+    const stale = await this.deps.session.getTokenData();
+    if (!stale) {
+      return this.requireReauth(ErrorCode.REFRESH_TOKEN_INVALID);
+    }
+    return withRefreshLock(`sanctum-sdk-refresh:${this.deps.baseUrl}:${stale.identifier}`, async () => {
+      const current = await this.deps.session.getTokenData();
+      if (!current) {
+        return this.requireReauth(ErrorCode.REFRESH_TOKEN_INVALID);
+      }
+      if (current.refresh_token !== stale.refresh_token) {
+        return current;
+      }
+      return this.mintFromRefreshToken(current.refresh_token);
+    });
+  }
+
+  private async mintFromRefreshToken(refreshToken: string): Promise<Types.TokensData> {
+    const refresh = await this.client.MintFromRefreshToken({ refresh_token: refreshToken });
+    if (refresh.status === 'ERROR') {
+      if (isReauthReason(refresh.reason)) {
+        return this.requireReauth(refresh.reason);
+      }
+      throw new SanctumDKError(refresh.reason, refresh.reason);
+    }
+    await this.deps.session.updateTokensAfterRefresh(refresh);
+    return refresh;
   }
 
   private async unwrapResult<T extends object>(promise: Promise<Types.ResultError | ({ status: 'OK' } & T)>): Promise<T> {

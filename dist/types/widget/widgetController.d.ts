@@ -12,6 +12,8 @@ type WidgetControllerDeps = {
 export declare class WidgetController {
     private static sharedStylesheet;
     private static sharedStyleText;
+    private static shadowRoots;
+    private static shadowRootFor;
     private hostElement;
     private shadowRoot;
     private mountNode;

@@ -308,6 +308,15 @@ const isReauthReason = (reason) => {
         || reason === ErrorCode.GRANT_REVOKED;
 };
 
+// Sanctum rotates refresh tokens and revokes the grant when a used one comes back,
+// so tabs sharing token storage must refresh one at a time.
+async function withRefreshLock(name, fn) {
+    const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
+    if (!locks)
+        return fn();
+    return locks.request(name, fn);
+}
+
 // Mimics axios-like response structure
 async function fetchWithAxiosStructure(url, options) {
     const response = await fetch(url, {
@@ -560,29 +569,40 @@ class ApiFacade {
         if (this.refreshPromise) {
             return this.refreshPromise;
         }
-        this.refreshPromise = (async () => {
-            const current = await this.deps.session.getTokenData();
-            if (!current) {
-                return this.requireReauth(ErrorCode.REFRESH_TOKEN_INVALID);
-            }
-            const refresh = await this.client.MintFromRefreshToken({
-                refresh_token: current.refresh_token,
-            });
-            if (refresh.status === 'ERROR') {
-                if (isReauthReason(refresh.reason)) {
-                    return this.requireReauth(refresh.reason);
-                }
-                throw new SanctumDKError(refresh.reason, refresh.reason);
-            }
-            await this.deps.session.updateTokensAfterRefresh(refresh);
-            return refresh;
-        })();
+        this.refreshPromise = this.refreshAcrossTabs();
         try {
             return await this.refreshPromise;
         }
         finally {
             this.refreshPromise = null;
         }
+    }
+    async refreshAcrossTabs() {
+        const stale = await this.deps.session.getTokenData();
+        if (!stale) {
+            return this.requireReauth(ErrorCode.REFRESH_TOKEN_INVALID);
+        }
+        return withRefreshLock(`sanctum-sdk-refresh:${this.deps.baseUrl}:${stale.identifier}`, async () => {
+            const current = await this.deps.session.getTokenData();
+            if (!current) {
+                return this.requireReauth(ErrorCode.REFRESH_TOKEN_INVALID);
+            }
+            if (current.refresh_token !== stale.refresh_token) {
+                return current;
+            }
+            return this.mintFromRefreshToken(current.refresh_token);
+        });
+    }
+    async mintFromRefreshToken(refreshToken) {
+        const refresh = await this.client.MintFromRefreshToken({ refresh_token: refreshToken });
+        if (refresh.status === 'ERROR') {
+            if (isReauthReason(refresh.reason)) {
+                return this.requireReauth(refresh.reason);
+            }
+            throw new SanctumDKError(refresh.reason, refresh.reason);
+        }
+        await this.deps.session.updateTokensAfterRefresh(refresh);
+        return refresh;
     }
     async unwrapResult(promise) {
         const result = await promise;
@@ -881,6 +901,14 @@ function escapeHtml(s) {
         .replace(/"/g, '&quot;');
 }
 class WidgetController {
+    static shadowRootFor(host) {
+        let root = WidgetController.shadowRoots.get(host);
+        if (!root) {
+            root = host.attachShadow({ mode: 'closed' });
+            WidgetController.shadowRoots.set(host, root);
+        }
+        return root;
+    }
     constructor(deps) {
         this.hostElement = null;
         this.shadowRoot = null;
@@ -967,7 +995,8 @@ class WidgetController {
             this.unmount();
         }
         this.hostElement = container;
-        this.shadowRoot = container.attachShadow({ mode: 'closed' });
+        this.shadowRoot = WidgetController.shadowRootFor(container);
+        this.shadowRoot.innerHTML = '';
         this.mountNode = document.createElement('div');
         this.mountNode.className = 'sanctum-widget-mount';
         this.shadowRoot.appendChild(this.mountNode);
@@ -1310,6 +1339,9 @@ class WidgetController {
 }
 WidgetController.sharedStylesheet = null;
 WidgetController.sharedStyleText = null;
+// Closed shadow roots can't be read back from the host or removed,
+// so remounting (React StrictMode, a new client on the same element) must reuse the one we attached.
+WidgetController.shadowRoots = new WeakMap();
 
 const deriveWebsocketUrl = (url) => {
     return url.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
