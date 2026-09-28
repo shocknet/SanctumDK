@@ -105,6 +105,9 @@ describe('Integration flows', () => {
     });
 
     const startPromise = client.start();
+    // flush
+    await new Promise((r) => setTimeout(r, 0));
+    
     const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1];
     expect(ws).toBeTruthy();
 
