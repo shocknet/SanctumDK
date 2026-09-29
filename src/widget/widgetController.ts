@@ -28,6 +28,18 @@ function escapeHtml(s: string): string {
 export class WidgetController {
   private static sharedStylesheet: CSSStyleSheet | null = null;
   private static sharedStyleText: string | null = null;
+  // Closed shadow roots can't be read back from the host or removed,
+  // so remounting (React StrictMode, a new client on the same element) must reuse the one we attached.
+  private static shadowRoots = new WeakMap<HTMLElement, ShadowRoot>();
+
+  private static shadowRootFor(host: HTMLElement): ShadowRoot {
+    let root = WidgetController.shadowRoots.get(host);
+    if (!root) {
+      root = host.attachShadow({ mode: 'closed' });
+      WidgetController.shadowRoots.set(host, root);
+    }
+    return root;
+  }
 
 
   private hostElement: HTMLElement | null = null;
@@ -92,7 +104,8 @@ export class WidgetController {
       this.unmount();
     }
     this.hostElement = container;
-    this.shadowRoot = container.attachShadow({ mode: 'closed' });
+    this.shadowRoot = WidgetController.shadowRootFor(container);
+    this.shadowRoot.innerHTML = '';
     this.mountNode = document.createElement('div');
     this.mountNode.className = 'sanctum-widget-mount';
     this.shadowRoot.appendChild(this.mountNode);

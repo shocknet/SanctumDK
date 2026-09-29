@@ -155,4 +155,52 @@ describe('ApiFacade', () => {
     });
     expect(refreshCalls.length).toBe(1);
   });
+
+  it('refreshes once across tabs sharing token storage', async () => {
+    let tail: Promise<unknown> = Promise.resolve();
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: (_name: string, fn: () => Promise<unknown>) => {
+          const run = tail.then(fn);
+          tail = run.catch(() => {});
+          return run;
+        }
+      }
+    });
+
+    const h = createHarness({ expires_at: now - 1, refresh_expires_at: now + 60_000 });
+    const usedRefreshTokens: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === '/api/guest/refresh') {
+        usedRefreshTokens.push(JSON.parse(String(init?.body)).refresh_token);
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'OK',
+            identifier: 'id-1',
+            account_identifier: 'demo',
+            access_token: 'new-access',
+            refresh_token: 'refresh-2',
+            expires_at: now + 500_000,
+            refresh_expires_at: now + 700_000
+          })
+        } as any;
+      }
+      return { ok: true, json: async () => ({ status: 'OK', pubkey: 'pubkey-123' }) } as any;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const makeTab = () => new ApiFacade({
+      baseUrl: 'http://example.test',
+      session: new SessionManager(h.adapter, new TypedEventBus()),
+      events: h.events,
+      clientKeyStore: h.clientKeyStore
+    });
+
+    await Promise.all([makeTab().getPublicKey(), makeTab().getPublicKey()]);
+
+    expect(usedRefreshTokens).toEqual(['refresh-1']);
+    expect(h.getToken()?.refresh_token).toBe('refresh-2');
+  });
 });

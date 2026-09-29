@@ -108,6 +108,13 @@ Most API methods throw `SanctumDKError` on failure.
   - unmounts/destroys the widget (future `widget.mount(...)` on the same instance will throw)
   - clears all event handlers registered through `client.events`
   - does **not** clear persisted tokens/session storage (use `client.session.clear()` for logout)
+- Mounting on an element that already hosts a Sanctum widget (React StrictMode, a new client on the same element) rebuilds the widget in place.
+
+## Multiple tabs
+
+Refresh tokens are single-use. Clients that share token storage refresh under a Web Locks API lock (`navigator.locks`), one tab at a time. After waiting for the lock, a client re-reads its tokens; if another tab already swapped the refresh token, it uses those instead of refreshing again.
+
+This only works if `tokenDataAdapter.getTokenData()` reads the shared storage every time, not a copy cached in memory. The default `storageAdapter` (`localStorage`) already does.
 
 ## Reauth Behavior
 

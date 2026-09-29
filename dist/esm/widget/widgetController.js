@@ -13,6 +13,14 @@ function escapeHtml(s) {
         .replace(/"/g, '&quot;');
 }
 class WidgetController {
+    static shadowRootFor(host) {
+        let root = WidgetController.shadowRoots.get(host);
+        if (!root) {
+            root = host.attachShadow({ mode: 'closed' });
+            WidgetController.shadowRoots.set(host, root);
+        }
+        return root;
+    }
     constructor(deps) {
         this.hostElement = null;
         this.shadowRoot = null;
@@ -99,7 +107,8 @@ class WidgetController {
             this.unmount();
         }
         this.hostElement = container;
-        this.shadowRoot = container.attachShadow({ mode: 'closed' });
+        this.shadowRoot = WidgetController.shadowRootFor(container);
+        this.shadowRoot.innerHTML = '';
         this.mountNode = document.createElement('div');
         this.mountNode.className = 'sanctum-widget-mount';
         this.shadowRoot.appendChild(this.mountNode);
@@ -442,6 +451,9 @@ class WidgetController {
 }
 WidgetController.sharedStylesheet = null;
 WidgetController.sharedStyleText = null;
+// Closed shadow roots can't be read back from the host or removed,
+// so remounting (React StrictMode, a new client on the same element) must reuse the one we attached.
+WidgetController.shadowRoots = new WeakMap();
 
 export { WidgetController };
 //# sourceMappingURL=widgetController.js.map

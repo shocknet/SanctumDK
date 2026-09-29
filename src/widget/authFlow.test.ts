@@ -76,6 +76,25 @@ describe('Integration flows', () => {
     expect(() => client.widget.mount({ containerId: 'sanctum-widget' })).toThrow();
   });
 
+  it('remounting on the same element rebuilds the widget instead of throwing', async () => {
+    (window as any).matchMedia ??= () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+
+    const div = document.createElement('div');
+    div.id = 'sanctum-widget-remount';
+    document.body.appendChild(div);
+
+    const first = createSanctumDK({ url: 'https://auth.example.com' });
+    first.widget.mount({ containerId: 'sanctum-widget-remount', theme: 'dark' });
+    await first.destroy();
+
+    const second = createSanctumDK({ url: 'https://auth.example.com' });
+    expect(() => second.widget.mount({ containerId: 'sanctum-widget-remount', theme: 'light' })).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(div.getAttribute('data-theme')).toBe('light');
+    await second.destroy();
+  });
+
   it('AuthSocketClient start() resolves after receiving TokensData', async () => {
     // Provide WebSocket implementation for the socket client.
     (globalThis as any).WebSocket = MockWebSocket as any;
@@ -86,6 +105,9 @@ describe('Integration flows', () => {
     });
 
     const startPromise = client.start();
+    // flush
+    await new Promise((r) => setTimeout(r, 0));
+    
     const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1];
     expect(ws).toBeTruthy();
 

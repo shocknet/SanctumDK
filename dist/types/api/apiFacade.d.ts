@@ -17,6 +17,8 @@ export declare class ApiFacade implements SanctumApi {
     private requireReauth;
     private isRefreshableAuthError;
     private refreshTokensSingleFlight;
+    private refreshAcrossTabs;
+    private mintFromRefreshToken;
     private unwrapResult;
     private withRefreshRetry;
     getPublicKey(): Promise<string>;
