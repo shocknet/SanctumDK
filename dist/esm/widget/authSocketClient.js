@@ -4,7 +4,9 @@ import { AuthSocketResponse_payload_type } from '../proto/types.js';
 const AUTH_SOCKET_CANCELLED_MESSAGE = 'cancelled by user';
 const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
-const DEFAULT_RECONNECT_BACKOFF_MS = [10000, 10000, 10000, 20000, 20000, 30000, 60000];
+// First retry is short: the approval screen backgrounds this page, the socket
+// drops, and this delay is what the user waits through after they come back.
+const DEFAULT_RECONNECT_BACKOFF_MS = [250, 1000, 2000, 5000, 10000];
 const SOCKET_PROTOCOL_VERSION = 1;
 class AuthSocketClient {
     constructor(options) {
@@ -16,8 +18,33 @@ class AuthSocketClient {
         this.reconnectTimer = null;
         this.reconnectAttempts = 0;
         this.aborted = false;
+        /** Drop or pending retry happened while hidden or paused. Dial on return instead of spending retries. */
+        this.parkedUntilForeground = false;
+        /** Capacitor/Cordova app pause. Visibility is read live, so a hidden start still unparks. */
+        this.paused = false;
+        /** False after hide/pause, so a dial still open from before that is stale when we return. */
+        this.dialWhileInFront = false;
+        this.foregroundBound = false;
         /** Last request_token from the server; sent on hello after reconnect so the backend can resume. */
         this.lastRequestToken = null;
+        this.onVisibilityChange = () => {
+            if (this.pageHidden()) {
+                this.markAway();
+                return;
+            }
+            this.resumeFromBackground();
+        };
+        this.onPause = () => {
+            this.paused = true;
+            this.markAway();
+        };
+        this.onResume = () => {
+            this.paused = false;
+            this.resumeFromBackground();
+        };
+        this.onFocus = () => {
+            this.resumeFromBackground();
+        };
         this.url = options.url;
         this.getClientKey = options.getClientKey;
         this.returnTo = options.returnTo;
@@ -49,6 +76,10 @@ class AuthSocketClient {
         this.aborted = false;
         this.reconnectAttempts = 0;
         this.lastRequestToken = null;
+        this.parkedUntilForeground = false;
+        this.paused = false;
+        this.dialWhileInFront = false;
+        this.bindForegroundSignals();
         this.socketPromise = new Promise((resolve, reject) => {
             this.resolveStart = resolve;
             this.rejectStart = reject;
@@ -57,6 +88,8 @@ class AuthSocketClient {
             this.socketPromise = undefined;
             this.resolveStart = null;
             this.rejectStart = null;
+            this.parkedUntilForeground = false;
+            this.unbindForegroundSignals();
             this.clearTimers();
         });
         return this.socketPromise;
@@ -66,6 +99,9 @@ class AuthSocketClient {
             return;
         this.aborted = true;
         this.lastRequestToken = null;
+        this.parkedUntilForeground = false;
+        this.paused = false;
+        this.unbindForegroundSignals();
         this.clearTimers();
         this.cleanupSocket();
         const reject = this.rejectStart;
@@ -76,9 +112,16 @@ class AuthSocketClient {
     openSocket() {
         if (this.aborted || !this.resolveStart)
             return;
+        if (this.awayFromPage()) {
+            this.parkUntilForeground();
+            return;
+        }
+        this.parkedUntilForeground = false;
+        this.dialWhileInFront = true;
         this.clearConnectTimeout();
         this.cleanupSocket();
-        this.onState?.(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
+        const rejoining = this.reconnectAttempts > 0 || this.lastRequestToken !== null;
+        this.onState?.(rejoining ? 'reconnecting' : 'connecting');
         const controller = new AbortController();
         this.socketAbortController = controller;
         this.connectTimeoutTimer = window.setTimeout(() => {
@@ -149,10 +192,18 @@ class AuthSocketClient {
         this.clearConnectTimeout();
         if (this.aborted)
             return;
+        // Hidden or paused pages fail the dial and would spend a retry. Wait until the page is back.
+        if (this.awayFromPage()) {
+            this.parkUntilForeground();
+            return;
+        }
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             this.terminalReject(new Error('WebSocket reconnection limit reached'));
             return;
         }
+        this.scheduleReconnect();
+    }
+    scheduleReconnect() {
         const idx = Math.min(this.reconnectAttempts, this.reconnectBackoff.length - 1);
         const delay = this.reconnectBackoff[idx] ?? this.reconnectBackoff[this.reconnectBackoff.length - 1];
         this.reconnectAttempts += 1;
@@ -160,6 +211,53 @@ class AuthSocketClient {
             this.reconnectTimer = null;
             this.openSocket();
         }, delay);
+    }
+    parkUntilForeground() {
+        this.parkedUntilForeground = true;
+        this.clearTimers();
+    }
+    awayFromPage() {
+        return this.paused || this.pageHidden();
+    }
+    pageHidden() {
+        return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    }
+    markAway() {
+        this.dialWhileInFront = false;
+        if (this.reconnectTimer === null)
+            return;
+        this.parkUntilForeground();
+    }
+    resumeFromBackground() {
+        if (this.aborted || !this.resolveStart)
+            return;
+        if (this.awayFromPage())
+            return;
+        const hungDial = this.connectTimeoutTimer !== null && !this.dialWhileInFront;
+        const waiting = this.parkedUntilForeground || this.reconnectTimer !== null || hungDial;
+        if (!waiting)
+            return;
+        this.parkedUntilForeground = false;
+        this.clearTimers();
+        this.openSocket();
+    }
+    bindForegroundSignals() {
+        if (this.foregroundBound || typeof document === 'undefined')
+            return;
+        document.addEventListener('visibilitychange', this.onVisibilityChange);
+        document.addEventListener('pause', this.onPause);
+        document.addEventListener('resume', this.onResume);
+        window.addEventListener('focus', this.onFocus);
+        this.foregroundBound = true;
+    }
+    unbindForegroundSignals() {
+        if (!this.foregroundBound || typeof document === 'undefined')
+            return;
+        document.removeEventListener('visibilitychange', this.onVisibilityChange);
+        document.removeEventListener('pause', this.onPause);
+        document.removeEventListener('resume', this.onResume);
+        window.removeEventListener('focus', this.onFocus);
+        this.foregroundBound = false;
     }
     terminalReject(err) {
         this.onError?.(err.message);
