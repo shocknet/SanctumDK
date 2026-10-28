@@ -77,6 +77,7 @@ class WidgetController {
         this.socket = new AuthSocketClient({
             url: this.deps.websocketUrl,
             getClientKey: () => this.deps.clientKeyStore.getClientKey(),
+            returnTo: this.deps.returnTo,
             onState: (s) => {
                 if (s === 'reconnecting')
                     this.setStatus('reconnecting');

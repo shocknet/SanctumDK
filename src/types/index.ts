@@ -28,6 +28,8 @@ export interface SanctumDKConfig {
    * When set, used as the Sanctum client key (e.g. Capacitor / device id). When omitted, an 8-character key is generated once and persisted via `storageAdapter`.
    */
   getClientKey?: () => MaybePromise<string>;
+  /** Sent as `return_to` on the auth socket hello. */
+  returnTo?: string;
 }
 
 export interface SanctumDKErrorShape {

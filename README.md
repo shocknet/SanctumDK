@@ -60,6 +60,7 @@ Config:
 - `storageAdapter` (optional)
 - `tokenDataAdapter` (optional)
 - `getClientKey` (optional)
+- `returnTo` (optional, sent as `return_to` on the auth socket hello)
 
 ### `client.api`
 

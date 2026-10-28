@@ -41,7 +41,8 @@ export const createSanctumDK = (config: SanctumDKConfig): SanctumDK => {
     websocketUrl,
     session,
     events,
-    clientKeyStore
+    clientKeyStore,
+    returnTo: config.returnTo
   });
 
   const eventApi: SanctumDKEvents = {

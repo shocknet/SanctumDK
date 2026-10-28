@@ -139,5 +139,46 @@ describe('Integration flows', () => {
     const tokens = await startPromise;
     expect(tokens.access_token).toBe('a');
   });
+
+  it('sends return_to on the socket hello when returnTo is set', async () => {
+    (globalThis as any).WebSocket = MockWebSocket as any;
+    MockWebSocket.instances = [];
+
+    const client = new AuthSocketClient({
+      url: 'wss://auth.example.com',
+      getClientKey: async () => 'client-key-1',
+      returnTo: 'https://wallet.example/auth-done',
+    });
+
+    const startPromise = client.start();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+    const hello = JSON.parse(ws!.sent[0]).body;
+    expect(hello.return_to).toBe('https://wallet.example/auth-done');
+    expect(hello.client_key).toBe('client-key-1');
+    expect(hello.protocol_version).toBe(1);
+    client.abort();
+    await expect(startPromise).rejects.toThrow('cancelled by user');
+  });
+
+  it('omits return_to on the socket hello when returnTo is not set', async () => {
+    (globalThis as any).WebSocket = MockWebSocket as any;
+    MockWebSocket.instances = [];
+
+    const client = new AuthSocketClient({
+      url: 'wss://auth.example.com',
+      getClientKey: async () => 'client-key-1',
+    });
+
+    const startPromise = client.start();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+    const hello = JSON.parse(ws!.sent[0]).body;
+    expect(hello.return_to).toBeUndefined();
+    client.abort();
+    await expect(startPromise).rejects.toThrow('cancelled by user');
+  });
 });
 

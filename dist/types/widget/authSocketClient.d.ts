@@ -4,6 +4,8 @@ export type AuthSocketState = 'connecting' | 'reconnecting' | 'connected';
 export type AuthSocketOptions = {
     url: string;
     getClientKey: () => Promise<string>;
+    /** Sent as `return_to` on hello, including after reconnect. */
+    returnTo?: string;
     onState?: (state: AuthSocketState) => void;
     onRequestToken?: (message: AuthSocketAuthRequestTokenResponse) => void;
     onError?: (message: string) => void;
@@ -33,6 +35,7 @@ export declare class AuthSocketClient {
     private aborted;
     /** Last request_token from the server; sent on hello after reconnect so the backend can resume. */
     private lastRequestToken;
+    private readonly returnTo?;
     constructor(options: AuthSocketOptions);
     start(): Promise<TokensData>;
     abort(): void;

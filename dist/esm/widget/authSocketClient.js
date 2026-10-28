@@ -20,6 +20,7 @@ class AuthSocketClient {
         this.lastRequestToken = null;
         this.url = options.url;
         this.getClientKey = options.getClientKey;
+        this.returnTo = options.returnTo;
         this.client = httpClient({
             baseUrl: options.url,
             retrieveGuestSensitiveAuth: async () => '',
@@ -97,6 +98,7 @@ class AuthSocketClient {
                 client_key: await this.getClientKey(),
                 protocol_version: SOCKET_PROTOCOL_VERSION,
                 request_token: this.lastRequestToken ?? undefined,
+                return_to: this.returnTo
             };
             const socket = await this.client.AuthSocket(hello, (result) => this.handleMessage(result), controller.signal, {
                 onOpen: () => {
