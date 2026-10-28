@@ -8,6 +8,7 @@ type WidgetControllerDeps = {
     session: SessionManager;
     events: TypedEventBus;
     clientKeyStore: ClientKeyStore;
+    returnTo?: string;
 };
 export declare class WidgetController {
     private static sharedStylesheet;

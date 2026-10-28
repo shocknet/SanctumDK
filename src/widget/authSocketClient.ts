@@ -13,6 +13,8 @@ export type AuthSocketState = 'connecting' | 'reconnecting' | 'connected';
 export type AuthSocketOptions = {
   url: string;
   getClientKey: () => Promise<string>;
+  /** Sent as `return_to` on hello, including after reconnect. */
+  returnTo?: string;
   onState?: (state: AuthSocketState) => void;
   onRequestToken?: (message: AuthSocketAuthRequestTokenResponse) => void;
   onError?: (message: string) => void;
@@ -51,10 +53,12 @@ export class AuthSocketClient {
   private aborted = false;
   /** Last request_token from the server; sent on hello after reconnect so the backend can resume. */
   private lastRequestToken: string | null = null;
+  private readonly returnTo?: string;
 
   constructor(options: AuthSocketOptions) {
     this.url = options.url;
     this.getClientKey = options.getClientKey;
+    this.returnTo = options.returnTo;
     this.client = httpClient({
       baseUrl: options.url,
       retrieveGuestSensitiveAuth: async () => '',
@@ -137,6 +141,7 @@ export class AuthSocketClient {
         client_key: await this.getClientKey(),
         protocol_version: SOCKET_PROTOCOL_VERSION,
         request_token: this.lastRequestToken ?? undefined,
+        return_to: this.returnTo
       };
       const socket = await this.client.AuthSocket(hello, (result) => this.handleMessage(result), controller.signal, {
         onOpen: () => {

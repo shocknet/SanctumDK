@@ -37,7 +37,8 @@ const createSanctumDK = (config) => {
         websocketUrl,
         session,
         events,
-        clientKeyStore
+        clientKeyStore,
+        returnTo: config.returnTo
     });
     const eventApi = {
         onTokenChange: (handler) => events.on('tokenChange', handler),

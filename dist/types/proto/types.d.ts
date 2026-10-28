@@ -229,14 +229,16 @@ export type AuthSocketClientHello = {
     client_key: string;
     protocol_version: number;
     request_token?: string;
+    return_to?: string;
 };
-export type AuthSocketClientHelloOptionalField = 'request_token';
+export type AuthSocketClientHelloOptionalField = 'request_token' | 'return_to';
 export declare const AuthSocketClientHelloOptionalFields: AuthSocketClientHelloOptionalField[];
 export type AuthSocketClientHelloOptions = OptionsBaseMessage & {
     checkOptionalsAreSet?: AuthSocketClientHelloOptionalField[];
     client_key_CustomCheck?: (v: string) => boolean;
     protocol_version_CustomCheck?: (v: number) => boolean;
     request_token_CustomCheck?: (v?: string) => boolean;
+    return_to_CustomCheck?: (v?: string) => boolean;
 };
 export declare const AuthSocketClientHelloValidate: (o?: AuthSocketClientHello, opts?: AuthSocketClientHelloOptions, path?: string) => Error | null;
 export type AuthSocketResponse = {

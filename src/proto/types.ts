@@ -256,14 +256,16 @@ export type AuthSocketClientHello = {
     client_key: string
     protocol_version: number
     request_token?: string
+    return_to?: string
 }
-export type AuthSocketClientHelloOptionalField = 'request_token'
-export const AuthSocketClientHelloOptionalFields: AuthSocketClientHelloOptionalField[] = ['request_token']
+export type AuthSocketClientHelloOptionalField = 'request_token' | 'return_to'
+export const AuthSocketClientHelloOptionalFields: AuthSocketClientHelloOptionalField[] = ['request_token', 'return_to']
 export type AuthSocketClientHelloOptions = OptionsBaseMessage & {
     checkOptionalsAreSet?: AuthSocketClientHelloOptionalField[]
     client_key_CustomCheck?: (v: string) => boolean
     protocol_version_CustomCheck?: (v: number) => boolean
     request_token_CustomCheck?: (v?: string) => boolean
+    return_to_CustomCheck?: (v?: string) => boolean
 }
 export const AuthSocketClientHelloValidate = (o?: AuthSocketClientHello, opts: AuthSocketClientHelloOptions = {}, path: string = 'AuthSocketClientHello::root.'): Error | null => {
     if (opts.checkOptionalsAreSet && opts.allOptionalsAreSet) return new Error(path + ': only one of checkOptionalsAreSet or allOptionalNonDefault can be set for each message')
@@ -277,6 +279,9 @@ export const AuthSocketClientHelloValidate = (o?: AuthSocketClientHello, opts: A
 
     if ((o.request_token || opts.allOptionalsAreSet || opts.checkOptionalsAreSet?.includes('request_token')) && typeof o.request_token !== 'string') return new Error(`${path}.request_token: is not a string`)
     if (opts.request_token_CustomCheck && !opts.request_token_CustomCheck(o.request_token)) return new Error(`${path}.request_token: custom check failed`)
+
+    if ((o.return_to || opts.allOptionalsAreSet || opts.checkOptionalsAreSet?.includes('return_to')) && typeof o.return_to !== 'string') return new Error(`${path}.return_to: is not a string`)
+    if (opts.return_to_CustomCheck && !opts.return_to_CustomCheck(o.return_to)) return new Error(`${path}.return_to: custom check failed`)
 
     return null
 }

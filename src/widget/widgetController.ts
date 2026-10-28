@@ -15,6 +15,7 @@ type WidgetControllerDeps = {
   session: SessionManager;
   events: TypedEventBus;
   clientKeyStore: ClientKeyStore;
+  returnTo?: string;
 };
 
 function escapeHtml(s: string): string {
@@ -71,6 +72,7 @@ export class WidgetController {
     this.socket = new AuthSocketClient({
       url: this.deps.websocketUrl,
       getClientKey: () => this.deps.clientKeyStore.getClientKey(),
+      returnTo: this.deps.returnTo,
       onState: (s) => {
         if (s === 'reconnecting') this.setStatus('reconnecting');
         if (s === 'connecting') this.setStatus('connecting');
