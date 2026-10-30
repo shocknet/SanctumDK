@@ -33,9 +33,20 @@ export declare class AuthSocketClient {
     private reconnectTimer;
     private reconnectAttempts;
     private aborted;
+    /** Drop or pending retry happened while hidden or paused. Dial on return instead of spending retries. */
+    private parkedUntilForeground;
+    /** Capacitor/Cordova app pause. Visibility is read live, so a hidden start still unparks. */
+    private paused;
+    /** False after hide/pause, so a dial still open from before that is stale when we return. */
+    private dialWhileInFront;
+    private foregroundBound;
     /** Last request_token from the server; sent on hello after reconnect so the backend can resume. */
     private lastRequestToken;
     private readonly returnTo?;
+    private readonly onVisibilityChange;
+    private readonly onPause;
+    private readonly onResume;
+    private readonly onFocus;
     constructor(options: AuthSocketOptions);
     start(): Promise<TokensData>;
     abort(): void;
@@ -43,6 +54,14 @@ export declare class AuthSocketClient {
     private startSocket;
     private handleMessage;
     private handleDisconnected;
+    private scheduleReconnect;
+    private parkUntilForeground;
+    private awayFromPage;
+    private pageHidden;
+    private markAway;
+    private resumeFromBackground;
+    private bindForegroundSignals;
+    private unbindForegroundSignals;
     private terminalReject;
     private clearConnectTimeout;
     private clearTimers;
