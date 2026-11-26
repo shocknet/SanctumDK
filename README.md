@@ -61,6 +61,7 @@ Config:
 - `tokenDataAdapter` (optional)
 - `getClientKey` (optional)
 - `returnTo` (optional, sent as `return_to` on the auth socket hello)
+- `lifecycleAdapter` (optional, host app foreground/background signals replacing DOM visibility/pause/resume/focus listeners)
 
 ### `client.api`
 

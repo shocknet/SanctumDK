@@ -83,8 +83,9 @@ class ApiFacade {
             }
             throw new SanctumDKError(refresh.reason, refresh.reason);
         }
-        await this.deps.session.updateTokensAfterRefresh(refresh);
-        return refresh;
+        const { status: _status, ...tokens } = refresh;
+        await this.deps.session.updateTokensAfterRefresh(tokens);
+        return tokens;
     }
     async unwrapResult(promise) {
         const result = await promise;

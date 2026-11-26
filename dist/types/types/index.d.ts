@@ -2,7 +2,18 @@ import type { TokensData as ProtoTokensData } from '../proto/types';
 export type MaybePromise<T> = T | Promise<T>;
 export type WidgetTheme = 'system' | 'dark' | 'light';
 export type AuthState = 'idle' | 'connecting' | 'awaiting_confirmation' | 'authenticated' | 'error' | 'reconnecting';
+export type AppLifecycleState = 'foreground' | 'background';
 export type TokensData = ProtoTokensData;
+export interface LifecycleAdapter {
+    /**
+     * Subscribe to host app foreground/background transitions
+     * (e.g. Capacitor `App.addListener('appStateChange', ...)`).
+     * When provided, replaces built-in DOM visibility/pause/resume/focus listeners.
+     */
+    subscribe(listener: (state: AppLifecycleState) => void): () => void;
+    /** Optional current state check when starting a connection. Defaults to `'foreground'`. */
+    getState?: () => AppLifecycleState;
+}
 export interface SanctumStorageAdapter {
     getItem(key: string): MaybePromise<string | null>;
     setItem(key: string, value: string): MaybePromise<void>;
@@ -24,6 +35,11 @@ export interface SanctumDKConfig {
     getClientKey?: () => MaybePromise<string>;
     /** Sent as `return_to` on the auth socket hello. */
     returnTo?: string;
+    /**
+     * Host app foreground/background lifecycle adapter (e.g. Capacitor `App` plugin).
+     * When omitted, the SDK falls back to browser DOM visibility/pause/resume/focus events.
+     */
+    lifecycleAdapter?: LifecycleAdapter;
 }
 export interface SanctumDKErrorShape {
     code: string;

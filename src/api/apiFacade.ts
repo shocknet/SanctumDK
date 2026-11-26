@@ -105,8 +105,9 @@ export class ApiFacade implements SanctumApi {
       }
       throw new SanctumDKError(refresh.reason, refresh.reason);
     }
-    await this.deps.session.updateTokensAfterRefresh(refresh);
-    return refresh;
+    const { status: _status, ...tokens } = refresh;
+    await this.deps.session.updateTokensAfterRefresh(tokens);
+    return tokens;
   }
 
   private async unwrapResult<T extends object>(promise: Promise<Types.ResultError | ({ status: 'OK' } & T)>): Promise<T> {

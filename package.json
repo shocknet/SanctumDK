@@ -21,7 +21,7 @@
   ],
   "scripts": {
     "build": "npm run build:types && NODE_ENV=production rollup -c",
-    "build:types": "tsc --emitDeclarationOnly --declaration --declarationDir dist/types",
+    "build:types": "tsc -p tsconfig.build.json --emitDeclarationOnly --declaration --declarationDir dist/types",
     "dev": "NODE_ENV=development rollup -c --watch",
     "serve": "live-server --port=8090 --open=demo.html",
     "type-check": "tsc --noEmit",

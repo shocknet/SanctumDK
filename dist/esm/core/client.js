@@ -19,26 +19,29 @@ const assertUrl = (name, value) => {
 };
 const createSanctumDK = (config) => {
     assertUrl('url', config.url);
-    const websocketUrl = config.websocketUrl ?? deriveWebsocketUrl(config.url);
-    assertUrl('websocketUrl', websocketUrl);
+    const baseUrl = config.url.replace(/\/+$/, '');
+    const rawWebsocketUrl = config.websocketUrl ?? deriveWebsocketUrl(baseUrl);
+    assertUrl('websocketUrl', rawWebsocketUrl);
+    const websocketUrl = rawWebsocketUrl.replace(/\/+$/, '');
     const storageAdapter = config.storageAdapter ?? getDefaultStorageAdapter();
     const tokenDataAdapter = config.tokenDataAdapter ?? createStorageTokenDataAdapter(storageAdapter);
     const events = new TypedEventBus();
     const session = new SessionManager(tokenDataAdapter, events);
     const clientKeyStore = new ClientKeyStore(storageAdapter, config.getClientKey);
     const apiFacade = new ApiFacade({
-        baseUrl: config.url,
+        baseUrl,
         session,
         events,
         clientKeyStore,
     });
     const widgetController = new WidgetController({
-        sanctumUrl: config.url,
+        sanctumUrl: baseUrl,
         websocketUrl,
         session,
         events,
         clientKeyStore,
-        returnTo: config.returnTo
+        returnTo: config.returnTo,
+        lifecycleAdapter: config.lifecycleAdapter
     });
     const eventApi = {
         onTokenChange: (handler) => events.on('tokenChange', handler),

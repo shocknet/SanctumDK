@@ -1,4 +1,4 @@
-import type { TokensData } from '../types';
+import type { AppLifecycleState, LifecycleAdapter, TokensData } from '../types';
 import httpClient from '../proto/http_client';
 import {
   AuthSocketResponse,
@@ -15,6 +15,8 @@ export type AuthSocketOptions = {
   getClientKey: () => Promise<string>;
   /** Sent as `return_to` on hello, including after reconnect. */
   returnTo?: string;
+  /** Host app lifecycle adapter; replaces built-in DOM visibility/pause/resume/focus listeners. */
+  lifecycleAdapter?: LifecycleAdapter;
   onState?: (state: AuthSocketState) => void;
   onRequestToken?: (message: AuthSocketAuthRequestTokenResponse) => void;
   onError?: (message: string) => void;
@@ -55,21 +57,35 @@ export class AuthSocketClient {
   private aborted = false;
   /** Drop or pending retry happened while hidden or paused. Dial on return instead of spending retries. */
   private parkedUntilForeground = false;
-  /** Capacitor/Cordova app pause. Visibility is read live, so a hidden start still unparks. */
+  /** Cordova/DOM app pause (used only when no lifecycleAdapter is provided). */
   private paused = false;
-  /** False after hide/pause, so a dial still open from before that is stale when we return. */
-  private dialWhileInFront = false;
+  /** Host-reported background state when lifecycleAdapter is provided. */
+  private hostBackground = false;
+  /** True after going to background while a dial or socket was active, so return re-dials a fresh socket. */
+  private staleAfterBackground = false;
   private foregroundBound = false;
+  private unsubscribeLifecycle: (() => void) | null = null;
   /** Last request_token from the server; sent on hello after reconnect so the backend can resume. */
   private lastRequestToken: string | null = null;
   private readonly returnTo?: string;
+  private readonly lifecycleAdapter?: LifecycleAdapter;
+
+  private readonly onHostLifecycleChange = (state: AppLifecycleState): void => {
+    if (state === 'background') {
+      this.hostBackground = true;
+      this.markAway();
+      return;
+    }
+    this.hostBackground = false;
+    this.resumeFromBackground(true);
+  };
 
   private readonly onVisibilityChange = (): void => {
     if (this.pageHidden()) {
       this.markAway();
       return;
     }
-    this.resumeFromBackground();
+    this.resumeFromBackground(false);
   };
 
   private readonly onPause = (): void => {
@@ -79,17 +95,18 @@ export class AuthSocketClient {
 
   private readonly onResume = (): void => {
     this.paused = false;
-    this.resumeFromBackground();
+    this.resumeFromBackground(false);
   };
 
   private readonly onFocus = (): void => {
-    this.resumeFromBackground();
+    this.resumeFromBackground(false);
   };
 
   constructor(options: AuthSocketOptions) {
     this.url = options.url;
     this.getClientKey = options.getClientKey;
     this.returnTo = options.returnTo;
+    this.lifecycleAdapter = options.lifecycleAdapter;
     this.client = httpClient({
       baseUrl: options.url,
       retrieveGuestSensitiveAuth: async () => '',
@@ -120,7 +137,8 @@ export class AuthSocketClient {
     this.lastRequestToken = null;
     this.parkedUntilForeground = false;
     this.paused = false;
-    this.dialWhileInFront = false;
+    this.hostBackground = this.lifecycleAdapter?.getState?.() === 'background';
+    this.staleAfterBackground = false;
     this.bindForegroundSignals();
 
     this.socketPromise = new Promise<TokensData>((resolve, reject) => {
@@ -132,6 +150,7 @@ export class AuthSocketClient {
       this.resolveStart = null;
       this.rejectStart = null;
       this.parkedUntilForeground = false;
+      this.staleAfterBackground = false;
       this.unbindForegroundSignals();
       this.clearTimers();
     });
@@ -145,6 +164,8 @@ export class AuthSocketClient {
     this.lastRequestToken = null;
     this.parkedUntilForeground = false;
     this.paused = false;
+    this.hostBackground = false;
+    this.staleAfterBackground = false;
     this.unbindForegroundSignals();
     this.clearTimers();
     this.cleanupSocket();
@@ -162,7 +183,7 @@ export class AuthSocketClient {
     }
 
     this.parkedUntilForeground = false;
-    this.dialWhileInFront = true;
+    this.staleAfterBackground = false;
     this.clearConnectTimeout();
     this.cleanupSocket();
 
@@ -190,6 +211,11 @@ export class AuthSocketClient {
         request_token: this.lastRequestToken ?? undefined,
         return_to: this.returnTo
       };
+      if (this.aborted || this.socketAbortController !== controller) return;
+      if (this.awayFromPage()) {
+        this.parkUntilForeground();
+        return;
+      }
       const socket = await this.client.AuthSocket(hello, (result) => this.handleMessage(result), controller.signal, {
         onOpen: () => {
           if (this.aborted || this.socketAbortController !== controller) return;
@@ -232,6 +258,8 @@ export class AuthSocketClient {
     if (message.payload.type === AuthSocketResponse_payload_type.TOKENS) {
       this.lastRequestToken = null;
       const resolve = this.resolveStart;
+      this.resolveStart = null;
+      this.rejectStart = null;
       this.cleanupSocket();
       resolve?.(message.payload.tokens);
     }
@@ -272,6 +300,9 @@ export class AuthSocketClient {
   }
 
   private awayFromPage(): boolean {
+    if (this.lifecycleAdapter) {
+      return this.hostBackground;
+    }
     return this.paused || this.pageHidden();
   }
 
@@ -280,26 +311,39 @@ export class AuthSocketClient {
   }
 
   private markAway(): void {
-    this.dialWhileInFront = false;
+    if (this.socket !== null || this.connectTimeoutTimer !== null || this.socketAbortController !== null) {
+      this.staleAfterBackground = true;
+    }
     if (this.reconnectTimer === null) return;
     this.parkUntilForeground();
   }
 
-  private resumeFromBackground(): void {
+  private resumeFromBackground(forceRefreshOpenSocket: boolean): void {
     if (this.aborted || !this.resolveStart) return;
     if (this.awayFromPage()) return;
 
-    const hungDial = this.connectTimeoutTimer !== null && !this.dialWhileInFront;
-    const waiting = this.parkedUntilForeground || this.reconnectTimer !== null || hungDial;
-    if (!waiting) return;
+    const hasOpenSocket = this.socket !== null && this.connectTimeoutTimer === null;
+    const shouldReconnect =
+      this.parkedUntilForeground ||
+      this.reconnectTimer !== null ||
+      this.staleAfterBackground ||
+      (forceRefreshOpenSocket && hasOpenSocket);
+    if (!shouldReconnect) return;
 
     this.parkedUntilForeground = false;
+    this.staleAfterBackground = false;
     this.clearTimers();
     this.openSocket();
   }
 
   private bindForegroundSignals(): void {
-    if (this.foregroundBound || typeof document === 'undefined') return;
+    if (this.foregroundBound) return;
+    if (this.lifecycleAdapter) {
+      this.unsubscribeLifecycle = this.lifecycleAdapter.subscribe(this.onHostLifecycleChange);
+      this.foregroundBound = true;
+      return;
+    }
+    if (typeof document === 'undefined') return;
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     document.addEventListener('pause', this.onPause);
     document.addEventListener('resume', this.onResume);
@@ -308,7 +352,15 @@ export class AuthSocketClient {
   }
 
   private unbindForegroundSignals(): void {
-    if (!this.foregroundBound || typeof document === 'undefined') return;
+    if (!this.foregroundBound) return;
+    if (this.unsubscribeLifecycle) {
+      const unsubscribe = this.unsubscribeLifecycle;
+      this.unsubscribeLifecycle = null;
+      unsubscribe();
+      this.foregroundBound = false;
+      return;
+    }
+    if (typeof document === 'undefined') return;
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     document.removeEventListener('pause', this.onPause);
     document.removeEventListener('resume', this.onResume);

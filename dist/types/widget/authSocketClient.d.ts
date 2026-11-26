@@ -1,4 +1,4 @@
-import type { TokensData } from '../types';
+import type { LifecycleAdapter, TokensData } from '../types';
 import { type AuthSocketAuthRequestTokenResponse } from '../proto/types';
 export type AuthSocketState = 'connecting' | 'reconnecting' | 'connected';
 export type AuthSocketOptions = {
@@ -6,6 +6,8 @@ export type AuthSocketOptions = {
     getClientKey: () => Promise<string>;
     /** Sent as `return_to` on hello, including after reconnect. */
     returnTo?: string;
+    /** Host app lifecycle adapter; replaces built-in DOM visibility/pause/resume/focus listeners. */
+    lifecycleAdapter?: LifecycleAdapter;
     onState?: (state: AuthSocketState) => void;
     onRequestToken?: (message: AuthSocketAuthRequestTokenResponse) => void;
     onError?: (message: string) => void;
@@ -35,14 +37,19 @@ export declare class AuthSocketClient {
     private aborted;
     /** Drop or pending retry happened while hidden or paused. Dial on return instead of spending retries. */
     private parkedUntilForeground;
-    /** Capacitor/Cordova app pause. Visibility is read live, so a hidden start still unparks. */
+    /** Cordova/DOM app pause (used only when no lifecycleAdapter is provided). */
     private paused;
-    /** False after hide/pause, so a dial still open from before that is stale when we return. */
-    private dialWhileInFront;
+    /** Host-reported background state when lifecycleAdapter is provided. */
+    private hostBackground;
+    /** True after going to background while a dial or socket was active, so return re-dials a fresh socket. */
+    private staleAfterBackground;
     private foregroundBound;
+    private unsubscribeLifecycle;
     /** Last request_token from the server; sent on hello after reconnect so the backend can resume. */
     private lastRequestToken;
     private readonly returnTo?;
+    private readonly lifecycleAdapter?;
+    private readonly onHostLifecycleChange;
     private readonly onVisibilityChange;
     private readonly onPause;
     private readonly onResume;

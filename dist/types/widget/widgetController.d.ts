@@ -1,4 +1,4 @@
-import type { WidgetMountOptions, WidgetTheme } from '../types';
+import type { LifecycleAdapter, WidgetMountOptions, WidgetTheme } from '../types';
 import type { SessionManager } from '../session/sessionManager';
 import type { TypedEventBus } from '../core/events';
 import type { ClientKeyStore } from '../storage/clientKeyStore';
@@ -9,6 +9,7 @@ type WidgetControllerDeps = {
     events: TypedEventBus;
     clientKeyStore: ClientKeyStore;
     returnTo?: string;
+    lifecycleAdapter?: LifecycleAdapter;
 };
 export declare class WidgetController {
     private static sharedStylesheet;

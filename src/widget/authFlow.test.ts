@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSanctumDK } from '../core/client';
-import { AUTH_SOCKET_CANCELLED_MESSAGE, AuthSocketClient } from './authSocketClient';
+import type { AppLifecycleState, LifecycleAdapter } from '../types';
+import { AUTH_SOCKET_CANCELLED_MESSAGE, AuthSocketClient, type AuthSocketOptions } from './authSocketClient';
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
@@ -201,12 +202,13 @@ describe('Auth socket reconnect', () => {
     setVisibility('visible');
   });
 
-  function startClient(): AuthSocketClient {
+  function startClient(overrides: Partial<AuthSocketOptions> = {}): AuthSocketClient {
     (globalThis as any).WebSocket = MockWebSocket as any;
     vi.useFakeTimers();
     client = new AuthSocketClient({
       url: 'wss://auth.example.com',
       getClientKey: async () => 'client-key-1',
+      ...overrides,
     });
     void client.start().catch((err: unknown) => {
       if (err instanceof Error && err.message === AUTH_SOCKET_CANCELLED_MESSAGE) return;
@@ -264,13 +266,34 @@ describe('Auth socket reconnect', () => {
     expect(helloBody(next).request_token).toBe('req-1');
   });
 
-  it('leaves a live socket alone when the page returns', async () => {
+  it('reconnects an apparently open socket on return to recover silently dead connections', async () => {
     startClient();
-    await openedSocket();
+    const first = await openedSocket();
+    first.emitMessage({
+      status: 'OK',
+      payload: {
+        type: 'request_token',
+        request_token: { request_token: 'req-open', expires_at: Date.now() + 30_000 }
+      }
+    });
     const before = MockWebSocket.instances.length;
 
     document.dispatchEvent(new Event('pause'));
     document.dispatchEvent(new Event('resume'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.readyState).toBe(MockWebSocket.CLOSED);
+    expect(MockWebSocket.instances.length).toBe(before + 1);
+    const next = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
+    expect(helloBody(next).request_token).toBe('req-open');
+  });
+
+  it('leaves a live socket alone on window focus when the page was never backgrounded', async () => {
+    startClient();
+    await openedSocket();
+    const before = MockWebSocket.instances.length;
+
+    window.dispatchEvent(new Event('blur'));
+    window.dispatchEvent(new Event('focus'));
     await vi.advanceTimersByTimeAsync(10_000);
     expect(MockWebSocket.instances.length).toBe(before);
   });
@@ -339,6 +362,97 @@ describe('Auth socket reconnect', () => {
     window.dispatchEvent(new Event('focus'));
     await vi.advanceTimersByTimeAsync(0);
     expect(MockWebSocket.instances.length).toBe(before + 1);
+  });
+
+  it('uses lifecycleAdapter instead of DOM events and unsubscribes on abort', async () => {
+    let emit: ((state: AppLifecycleState) => void) | null = null;
+    const unsubscribe = vi.fn();
+    const lifecycleAdapter: LifecycleAdapter = {
+      subscribe(listener) {
+        emit = listener;
+        return unsubscribe;
+      },
+    };
+
+    const activeClient = startClient({ lifecycleAdapter });
+    const first = await openedSocket();
+    first.emitMessage({
+      status: 'OK',
+      payload: {
+        type: 'request_token',
+        request_token: { request_token: 'req-host', expires_at: Date.now() + 30_000 }
+      }
+    });
+    const before = MockWebSocket.instances.length;
+
+    // Lying DOM events must be ignored when lifecycleAdapter is supplied.
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.dispatchEvent(new Event('pause'));
+    setVisibility('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.dispatchEvent(new Event('resume'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(MockWebSocket.instances.length).toBe(before);
+
+    // Host background -> foreground reconnects even if the old socket never emitted close.
+    emit!('background');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(MockWebSocket.instances.length).toBe(before);
+
+    emit!('foreground');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.readyState).toBe(MockWebSocket.CLOSED);
+    expect(MockWebSocket.instances.length).toBe(before + 1);
+    const next = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
+    expect(helloBody(next).request_token).toBe('req-host');
+
+    activeClient.abort();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconnects an open socket on explicit host foreground signal without disrupting a fresh dial', async () => {
+    let emit: ((state: AppLifecycleState) => void) | null = null;
+    const lifecycleAdapter: LifecycleAdapter = {
+      subscribe(listener) {
+        emit = listener;
+        return () => {};
+      },
+    };
+
+    startClient({ lifecycleAdapter });
+    await openedSocket();
+    const before = MockWebSocket.instances.length;
+
+    // Simulates Capacitor Browser browserFinished firing without a prior appStateChange(false).
+    MockWebSocket.holdOpen = true;
+    emit!('foreground');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(MockWebSocket.instances.length).toBe(before + 1);
+
+    // A duplicate foreground signal while the fresh dial is still connecting must not thrash it.
+    emit!('foreground');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(MockWebSocket.instances.length).toBe(before + 1);
+  });
+
+  it('respects lifecycleAdapter.getState() when starting in background', async () => {
+    let emit: ((state: AppLifecycleState) => void) | null = null;
+    const lifecycleAdapter: LifecycleAdapter = {
+      getState: () => 'background',
+      subscribe(listener) {
+        emit = listener;
+        return () => {};
+      },
+    };
+
+    startClient({ lifecycleAdapter });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(MockWebSocket.instances.length).toBe(0);
+
+    emit!('foreground');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(MockWebSocket.instances.length).toBe(1);
   });
 });
 

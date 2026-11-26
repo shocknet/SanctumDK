@@ -78,11 +78,15 @@ class WidgetController {
             url: this.deps.websocketUrl,
             getClientKey: () => this.deps.clientKeyStore.getClientKey(),
             returnTo: this.deps.returnTo,
+            lifecycleAdapter: this.deps.lifecycleAdapter,
             onState: (s) => {
                 if (s === 'reconnecting')
                     this.setStatus('reconnecting');
                 if (s === 'connecting')
                     this.setStatus('connecting');
+                if (s === 'connected' && this.requestToken && this.status === 'reconnecting') {
+                    this.setStatus('awaiting_confirmation');
+                }
             },
             onRequestToken: ({ request_token, expires_at }) => {
                 this.requestToken = request_token;
@@ -217,6 +221,7 @@ class WidgetController {
         if (!this.mounted)
             return;
         this.lastError = null;
+        this.requestToken = null;
         this.socket.abort();
         void this.socket
             .start()
@@ -289,6 +294,7 @@ class WidgetController {
     }
     handleCancel() {
         this.socket.abort();
+        this.requestToken = null;
         this.stopTimer();
         this.setStatus('idle');
     }
@@ -404,7 +410,7 @@ class WidgetController {
             case 'error':
                 return `
           <div class="sanctum-alt-view-container flex-col items-center justify-center gap-3 w-full">
-            <span class="h6 text-center">An error occured</span>
+            <span class="h6 text-center">An error occurred</span>
             <span class="body-sm text-muted text-center">${escapeHtml(this.lastError ?? 'Unknown error')}</span>
             <div class="flex-center">
               <button type="button" class="btn btn-sa sanctum-login-button" data-sa-action="retry">Try again</button>
