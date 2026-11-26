@@ -601,8 +601,9 @@ class ApiFacade {
             }
             throw new SanctumDKError(refresh.reason, refresh.reason);
         }
-        await this.deps.session.updateTokensAfterRefresh(refresh);
-        return refresh;
+        const { status: _status, ...tokens } = refresh;
+        await this.deps.session.updateTokensAfterRefresh(tokens);
+        return tokens;
     }
     async unwrapResult(promise) {
         const result = await promise;
@@ -669,7 +670,9 @@ class ApiFacade {
 const AUTH_SOCKET_CANCELLED_MESSAGE = 'cancelled by user';
 const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
-const DEFAULT_RECONNECT_BACKOFF_MS = [10000, 10000, 10000, 20000, 20000, 30000, 60000];
+// First retry is short: the approval screen backgrounds this page, the socket
+// drops, and this delay is what the user waits through after they come back.
+const DEFAULT_RECONNECT_BACKOFF_MS = [250, 1000, 2000, 5000, 10000];
 const SOCKET_PROTOCOL_VERSION = 1;
 class AuthSocketClient {
     constructor(options) {
@@ -681,11 +684,49 @@ class AuthSocketClient {
         this.reconnectTimer = null;
         this.reconnectAttempts = 0;
         this.aborted = false;
+        /** Drop or pending retry happened while hidden or paused. Dial on return instead of spending retries. */
+        this.parkedUntilForeground = false;
+        /** Cordova/DOM app pause (used only when no lifecycleAdapter is provided). */
+        this.paused = false;
+        /** Host-reported background state when lifecycleAdapter is provided. */
+        this.hostBackground = false;
+        /** True after going to background while a dial or socket was active, so return re-dials a fresh socket. */
+        this.staleAfterBackground = false;
+        this.foregroundBound = false;
+        this.unsubscribeLifecycle = null;
         /** Last request_token from the server; sent on hello after reconnect so the backend can resume. */
         this.lastRequestToken = null;
+        this.onHostLifecycleChange = (state) => {
+            if (state === 'background') {
+                this.hostBackground = true;
+                this.markAway();
+                return;
+            }
+            this.hostBackground = false;
+            this.resumeFromBackground(true);
+        };
+        this.onVisibilityChange = () => {
+            if (this.pageHidden()) {
+                this.markAway();
+                return;
+            }
+            this.resumeFromBackground(false);
+        };
+        this.onPause = () => {
+            this.paused = true;
+            this.markAway();
+        };
+        this.onResume = () => {
+            this.paused = false;
+            this.resumeFromBackground(false);
+        };
+        this.onFocus = () => {
+            this.resumeFromBackground(false);
+        };
         this.url = options.url;
         this.getClientKey = options.getClientKey;
         this.returnTo = options.returnTo;
+        this.lifecycleAdapter = options.lifecycleAdapter;
         this.client = httpClient({
             baseUrl: options.url,
             retrieveGuestSensitiveAuth: async () => '',
@@ -714,6 +755,11 @@ class AuthSocketClient {
         this.aborted = false;
         this.reconnectAttempts = 0;
         this.lastRequestToken = null;
+        this.parkedUntilForeground = false;
+        this.paused = false;
+        this.hostBackground = this.lifecycleAdapter?.getState?.() === 'background';
+        this.staleAfterBackground = false;
+        this.bindForegroundSignals();
         this.socketPromise = new Promise((resolve, reject) => {
             this.resolveStart = resolve;
             this.rejectStart = reject;
@@ -722,6 +768,9 @@ class AuthSocketClient {
             this.socketPromise = undefined;
             this.resolveStart = null;
             this.rejectStart = null;
+            this.parkedUntilForeground = false;
+            this.staleAfterBackground = false;
+            this.unbindForegroundSignals();
             this.clearTimers();
         });
         return this.socketPromise;
@@ -731,6 +780,11 @@ class AuthSocketClient {
             return;
         this.aborted = true;
         this.lastRequestToken = null;
+        this.parkedUntilForeground = false;
+        this.paused = false;
+        this.hostBackground = false;
+        this.staleAfterBackground = false;
+        this.unbindForegroundSignals();
         this.clearTimers();
         this.cleanupSocket();
         const reject = this.rejectStart;
@@ -741,9 +795,16 @@ class AuthSocketClient {
     openSocket() {
         if (this.aborted || !this.resolveStart)
             return;
+        if (this.awayFromPage()) {
+            this.parkUntilForeground();
+            return;
+        }
+        this.parkedUntilForeground = false;
+        this.staleAfterBackground = false;
         this.clearConnectTimeout();
         this.cleanupSocket();
-        this.onState?.(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
+        const rejoining = this.reconnectAttempts > 0 || this.lastRequestToken !== null;
+        this.onState?.(rejoining ? 'reconnecting' : 'connecting');
         const controller = new AbortController();
         this.socketAbortController = controller;
         this.connectTimeoutTimer = window.setTimeout(() => {
@@ -765,6 +826,12 @@ class AuthSocketClient {
                 request_token: this.lastRequestToken ?? undefined,
                 return_to: this.returnTo
             };
+            if (this.aborted || this.socketAbortController !== controller)
+                return;
+            if (this.awayFromPage()) {
+                this.parkUntilForeground();
+                return;
+            }
             const socket = await this.client.AuthSocket(hello, (result) => this.handleMessage(result), controller.signal, {
                 onOpen: () => {
                     if (this.aborted || this.socketAbortController !== controller)
@@ -806,6 +873,8 @@ class AuthSocketClient {
         if (message.payload.type === AuthSocketResponse_payload_type.TOKENS) {
             this.lastRequestToken = null;
             const resolve = this.resolveStart;
+            this.resolveStart = null;
+            this.rejectStart = null;
             this.cleanupSocket();
             resolve?.(message.payload.tokens);
         }
@@ -814,10 +883,18 @@ class AuthSocketClient {
         this.clearConnectTimeout();
         if (this.aborted)
             return;
+        // Hidden or paused pages fail the dial and would spend a retry. Wait until the page is back.
+        if (this.awayFromPage()) {
+            this.parkUntilForeground();
+            return;
+        }
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             this.terminalReject(new Error('WebSocket reconnection limit reached'));
             return;
         }
+        this.scheduleReconnect();
+    }
+    scheduleReconnect() {
         const idx = Math.min(this.reconnectAttempts, this.reconnectBackoff.length - 1);
         const delay = this.reconnectBackoff[idx] ?? this.reconnectBackoff[this.reconnectBackoff.length - 1];
         this.reconnectAttempts += 1;
@@ -825,6 +902,78 @@ class AuthSocketClient {
             this.reconnectTimer = null;
             this.openSocket();
         }, delay);
+    }
+    parkUntilForeground() {
+        this.parkedUntilForeground = true;
+        this.clearTimers();
+    }
+    awayFromPage() {
+        if (this.lifecycleAdapter) {
+            return this.hostBackground;
+        }
+        return this.paused || this.pageHidden();
+    }
+    pageHidden() {
+        return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    }
+    markAway() {
+        if (this.socket !== null || this.connectTimeoutTimer !== null || this.socketAbortController !== null) {
+            this.staleAfterBackground = true;
+        }
+        if (this.reconnectTimer === null)
+            return;
+        this.parkUntilForeground();
+    }
+    resumeFromBackground(forceRefreshOpenSocket) {
+        if (this.aborted || !this.resolveStart)
+            return;
+        if (this.awayFromPage())
+            return;
+        const hasOpenSocket = this.socket !== null && this.connectTimeoutTimer === null;
+        const shouldReconnect = this.parkedUntilForeground ||
+            this.reconnectTimer !== null ||
+            this.staleAfterBackground ||
+            (forceRefreshOpenSocket && hasOpenSocket);
+        if (!shouldReconnect)
+            return;
+        this.parkedUntilForeground = false;
+        this.staleAfterBackground = false;
+        this.clearTimers();
+        this.openSocket();
+    }
+    bindForegroundSignals() {
+        if (this.foregroundBound)
+            return;
+        if (this.lifecycleAdapter) {
+            this.unsubscribeLifecycle = this.lifecycleAdapter.subscribe(this.onHostLifecycleChange);
+            this.foregroundBound = true;
+            return;
+        }
+        if (typeof document === 'undefined')
+            return;
+        document.addEventListener('visibilitychange', this.onVisibilityChange);
+        document.addEventListener('pause', this.onPause);
+        document.addEventListener('resume', this.onResume);
+        window.addEventListener('focus', this.onFocus);
+        this.foregroundBound = true;
+    }
+    unbindForegroundSignals() {
+        if (!this.foregroundBound)
+            return;
+        if (this.unsubscribeLifecycle) {
+            const unsubscribe = this.unsubscribeLifecycle;
+            this.unsubscribeLifecycle = null;
+            unsubscribe();
+            this.foregroundBound = false;
+            return;
+        }
+        if (typeof document === 'undefined')
+            return;
+        document.removeEventListener('visibilitychange', this.onVisibilityChange);
+        document.removeEventListener('pause', this.onPause);
+        document.removeEventListener('resume', this.onResume);
+        window.removeEventListener('focus', this.onFocus);
+        this.foregroundBound = false;
     }
     terminalReject(err) {
         this.onError?.(err.message);
@@ -968,11 +1117,15 @@ class WidgetController {
             url: this.deps.websocketUrl,
             getClientKey: () => this.deps.clientKeyStore.getClientKey(),
             returnTo: this.deps.returnTo,
+            lifecycleAdapter: this.deps.lifecycleAdapter,
             onState: (s) => {
                 if (s === 'reconnecting')
                     this.setStatus('reconnecting');
                 if (s === 'connecting')
                     this.setStatus('connecting');
+                if (s === 'connected' && this.requestToken && this.status === 'reconnecting') {
+                    this.setStatus('awaiting_confirmation');
+                }
             },
             onRequestToken: ({ request_token, expires_at }) => {
                 this.requestToken = request_token;
@@ -1107,6 +1260,7 @@ class WidgetController {
         if (!this.mounted)
             return;
         this.lastError = null;
+        this.requestToken = null;
         this.socket.abort();
         void this.socket
             .start()
@@ -1179,6 +1333,7 @@ class WidgetController {
     }
     handleCancel() {
         this.socket.abort();
+        this.requestToken = null;
         this.stopTimer();
         this.setStatus('idle');
     }
@@ -1294,7 +1449,7 @@ class WidgetController {
             case 'error':
                 return `
           <div class="sanctum-alt-view-container flex-col items-center justify-center gap-3 w-full">
-            <span class="h6 text-center">An error occured</span>
+            <span class="h6 text-center">An error occurred</span>
             <span class="body-sm text-muted text-center">${escapeHtml(this.lastError ?? 'Unknown error')}</span>
             <div class="flex-center">
               <button type="button" class="btn btn-sa sanctum-login-button" data-sa-action="retry">Try again</button>
@@ -1359,26 +1514,29 @@ const assertUrl = (name, value) => {
 };
 const createSanctumDK = (config) => {
     assertUrl('url', config.url);
-    const websocketUrl = config.websocketUrl ?? deriveWebsocketUrl(config.url);
-    assertUrl('websocketUrl', websocketUrl);
+    const baseUrl = config.url.replace(/\/+$/, '');
+    const rawWebsocketUrl = config.websocketUrl ?? deriveWebsocketUrl(baseUrl);
+    assertUrl('websocketUrl', rawWebsocketUrl);
+    const websocketUrl = rawWebsocketUrl.replace(/\/+$/, '');
     const storageAdapter = config.storageAdapter ?? getDefaultStorageAdapter();
     const tokenDataAdapter = config.tokenDataAdapter ?? createStorageTokenDataAdapter(storageAdapter);
     const events = new TypedEventBus();
     const session = new SessionManager(tokenDataAdapter, events);
     const clientKeyStore = new ClientKeyStore(storageAdapter, config.getClientKey);
     const apiFacade = new ApiFacade({
-        baseUrl: config.url,
+        baseUrl,
         session,
         events,
         clientKeyStore,
     });
     const widgetController = new WidgetController({
-        sanctumUrl: config.url,
+        sanctumUrl: baseUrl,
         websocketUrl,
         session,
         events,
         clientKeyStore,
-        returnTo: config.returnTo
+        returnTo: config.returnTo,
+        lifecycleAdapter: config.lifecycleAdapter
     });
     const eventApi = {
         onTokenChange: (handler) => events.on('tokenChange', handler),

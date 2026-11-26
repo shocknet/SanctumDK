@@ -21,8 +21,10 @@ const assertUrl = (name: string, value: string): void => {
 
 export const createSanctumDK = (config: SanctumDKConfig): SanctumDK => {
   assertUrl('url', config.url);
-  const websocketUrl = config.websocketUrl ?? deriveWebsocketUrl(config.url);
-  assertUrl('websocketUrl', websocketUrl);
+  const baseUrl = config.url.replace(/\/+$/, '');
+  const rawWebsocketUrl = config.websocketUrl ?? deriveWebsocketUrl(baseUrl);
+  assertUrl('websocketUrl', rawWebsocketUrl);
+  const websocketUrl = rawWebsocketUrl.replace(/\/+$/, '');
 
   const storageAdapter = config.storageAdapter ?? getDefaultStorageAdapter();
   const tokenDataAdapter = config.tokenDataAdapter ?? createStorageTokenDataAdapter(storageAdapter);
@@ -31,18 +33,19 @@ export const createSanctumDK = (config: SanctumDKConfig): SanctumDK => {
   const session = new SessionManager(tokenDataAdapter, events);
   const clientKeyStore = new ClientKeyStore(storageAdapter, config.getClientKey);
   const apiFacade = new ApiFacade({
-    baseUrl: config.url,
+    baseUrl,
     session,
     events,
     clientKeyStore,
   });
   const widgetController = new WidgetController({
-    sanctumUrl: config.url,
+    sanctumUrl: baseUrl,
     websocketUrl,
     session,
     events,
     clientKeyStore,
-    returnTo: config.returnTo
+    returnTo: config.returnTo,
+    lifecycleAdapter: config.lifecycleAdapter
   });
 
   const eventApi: SanctumDKEvents = {

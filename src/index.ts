@@ -3,7 +3,9 @@ import { createSanctumDK } from './core/client';
 export { createSanctumDK };
 export { SanctumDKError, ErrorCode } from './core/errors';
 export type {
+  AppLifecycleState,
   AuthState,
+  LifecycleAdapter,
   SanctumDKConfig,
   SanctumDKEvents,
   SanctumDK,
